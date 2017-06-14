@@ -5,44 +5,56 @@ import com.facebook.react.bridge.ReadableMap;
 import com.facebook.react.uimanager.SimpleViewManager;
 import com.facebook.react.uimanager.ThemedReactContext;
 import com.facebook.react.uimanager.annotations.ReactProp;
+import javax.annotation.Nullable;
 
 import java.util.ArrayList;
 
 
 public class RCTImageSequenceManager extends SimpleViewManager<RCTImageSequenceView> {
-    @Override
-    public String getName() {
-        return "RCTImageSequence";
-    }
+	@Override
+	public String getName() {
+		return "RCTImageSequence";
+	}
 
-    @Override
-    protected RCTImageSequenceView createViewInstance(ThemedReactContext reactContext) {
-        return new RCTImageSequenceView(reactContext);
-    }
+	@Override
+	protected RCTImageSequenceView createViewInstance(ThemedReactContext reactContext) {
+		return new RCTImageSequenceView(reactContext);
+	}
 
-    /**
-     * sets the speed of the animation.
-     *
-     * @param view
-     * @param framesPerSecond
-     */
-    @ReactProp(name = "framesPerSecond")
-    public void setFramesPerSecond(final RCTImageSequenceView view, Integer framesPerSecond) {
-        view.setFramesPerSecond(framesPerSecond);
-    }
+	/**
+	 * sets the speed of the animation.
+	 *
+	 * @param view
+	 * @param framesPerSecond
+	 */
+	@ReactProp(name = "framesPerSecond")
+	public void setFramesPerSecond(final RCTImageSequenceView view, Integer framesPerSecond) {
+		view.setFramesPerSecond(framesPerSecond);
+	}
 
-    /**
-     * @param view
-     * @param images an array of ReadableMap's {uri: "http://...."} return value of the resolveAssetSource(....)
-     */
-    @ReactProp(name = "images")
-    public void setImages(final RCTImageSequenceView view, ReadableArray images) {
-        ArrayList<String> uris = new ArrayList<>();
-        for (int index = 0; index < images.size(); index++) {
-            ReadableMap map = images.getMap(index);
-            uris.add(map.getString("uri"));
-        }
+	/**
+	 * @param view
+	 * @param images an array of ReadableMap's {uri: "http://...."} return value of the resolveAssetSource(....)
+	 */
+	@ReactProp(name = "images")
+	public void setImages(final RCTImageSequenceView view, ReadableArray images) {
+		ArrayList<String> uris = new ArrayList<>();
+		for (int index = 0; index < images.size(); index++) {
+			ReadableMap map = images.getMap(index);
+			uris.add(map.getString("uri"));
+		}
 
-        view.setImages(uris);
-    }
+		view.setImages(uris);
+	}
+
+	/**
+	 * sets the size for scaling bitmaps
+	 *
+	 * @param size size object {width:xxx, height:xxx}
+	 */
+	@ReactProp(name = "size")
+	public void setDesiredSize(final RCTImageSequenceView view, @Nullable final ReadableMap size) {
+		if (size != null)
+			view.setDesiredSize(size.getInt("width"), size.getInt("height"));
+	}
 }
