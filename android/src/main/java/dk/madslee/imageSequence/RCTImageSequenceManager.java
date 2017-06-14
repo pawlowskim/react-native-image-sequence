@@ -53,7 +53,7 @@ public class RCTImageSequenceManager extends SimpleViewManager<RCTImageSequenceV
 	 * @param size size object {width:xxx, height:xxx}
 	 */
 	@ReactProp(name = "size")
-	public void setDesiredSize(final RCTImageSequenceView view, @Nullable final ReadableMap size) {
+	public void setSize(final RCTImageSequenceView view, @Nullable final ReadableMap size) {
 		if (size != null)
 			view.setDesiredSize(size.getInt("width"), size.getInt("height"));
 	}
