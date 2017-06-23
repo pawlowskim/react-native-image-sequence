@@ -9,26 +9,37 @@ import android.util.Log;
 import android.os.AsyncTask;
 import android.widget.ImageView;
 
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
 import java.net.URL;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.concurrent.RejectedExecutionException;
-import android.graphics.Bitmap.Config;
+import pl.igorczapski.utils.IOUtils;
 
 
 public class RCTImageSequenceView extends ImageView {
-	private Integer framesPerSecond = 24;
+	private static final int DEFAULT_FPS = 24;
+
+	private Integer framesPerSecond = DEFAULT_FPS;
 	private ArrayList<AsyncTask> activeTasks;
 	private HashMap<Integer, Bitmap> bitmaps;
 	private RCTResourceDrawableIdHelper resourceDrawableIdHelper;
 	private Integer desiredWidth = -1;
 	private Integer desiredHeight = -1;
+	/**
+	 * Map for storing uri to decoded image and its index in the bitmaps map.
+	 * This allows to avoid decoding repeated bitmaps.
+	 */
+	private HashMap<String, Integer> bitmapIndexes;
+	/**
+	 * Shared memory for decoding images. Shared between tasks, so they have to be executed in serial order.
+	 */
+	byte[] tempStorage;
 
 	public RCTImageSequenceView(Context context) {
 		super(context);
-
 		resourceDrawableIdHelper = new RCTResourceDrawableIdHelper();
 	}
 
@@ -49,58 +60,85 @@ public class RCTImageSequenceView extends ImageView {
 
 		@Override
 		protected Bitmap doInBackground(String... params) {
+			if (bitmapIndexes.containsKey(uri)) {
+				return bitmaps.get(bitmapIndexes.get(uri));
+			}
 			if (this.uri.startsWith("http")) {
 				return this.loadBitmapByExternalURL(this.uri);
 			}
-
 			return this.loadBitmapByLocalResource(this.uri);
 		}
 
 		private Bitmap loadBitmapByLocalResource(String uri) {
-			BitmapFactory.Options options = new BitmapFactory.Options();
-			options.inScaled = false;
-			options.inDither = false;
-			options.inPreferredConfig = Bitmap.Config.ARGB_8888;
-			Bitmap bitmap = BitmapFactory.decodeResource(this.context.getResources(),
-					resourceDrawableIdHelper.getResourceDrawableId(this.context, uri), options);
-			if (this.desiredWidth != -1 && this.desiredHeight != -1) {
-				return Bitmap.createScaledBitmap(bitmap, this.desiredWidth, this.desiredHeight, true);
+			if (this.desiredWidth > 0 && this.desiredHeight > 0) {
+				BitmapFactory.Options opts = new BitmapFactory.Options();
+				opts.inScaled = false;
+				opts.inTempStorage = tempStorage;
+				try {
+					if (context == null || isCancelled()) {
+						return null;
+					}
+					int resDrawableId = resourceDrawableIdHelper.getResourceDrawableId(context, uri);
+					if (resDrawableId != 0) {
+						return BitmapFactory.decodeResource(context.getResources(), resDrawableId, opts);
+					}
+					if (new File(uri).exists()) {
+						return BitmapFactory.decodeFile(uri, opts);
+					}
+				}
+				catch (Exception ex) {
+					Log.e("RCTImageSequence", "Cannot decode bitmap from file.");
+					ex.printStackTrace();
+				}
+				return null;
 			}
-			return bitmap;
+			else {
+				BitmapFactory.Options options = new BitmapFactory.Options();
+				options.inTempStorage = tempStorage;
+				Bitmap bitmap = BitmapFactory.decodeResource(this.context.getResources(),
+						resourceDrawableIdHelper.getResourceDrawableId(this.context, uri), options);
+				return bitmap;
+			}
 		}
 
 		private Bitmap loadBitmapByExternalURL(String uri) {
 			Bitmap bitmap = null;
-
+			InputStream in = null;
+			BitmapFactory.Options opts = new BitmapFactory.Options();
+			opts.inScaled = false;
+			opts.inJustDecodeBounds = false;
+			opts.inTempStorage = tempStorage;
 			try {
-				InputStream in = new URL(uri).openStream();
-				bitmap = BitmapFactory.decodeStream(in);
+				in = new URL(uri).openStream();
+				bitmap = BitmapFactory.decodeStream(in, null, opts);
 			}
 			catch (IOException e) {
 				e.printStackTrace();
 			}
-
-			if (this.desiredWidth != -1 && this.desiredHeight != -1) {
-				return Bitmap.createScaledBitmap(bitmap, this.desiredWidth, this.desiredHeight, true);
+			finally {
+				IOUtils.closeQuietly(in);
 			}
-
+			if (bitmap != null && this.desiredWidth > 0 && this.desiredHeight > 0) {
+				return Bitmap.createScaledBitmap(bitmap, this.desiredWidth, this.desiredHeight, false);
+			}
 			return bitmap;
 		}
 
 		@Override
 		protected void onPostExecute(Bitmap bitmap) {
-			if (!isCancelled()) {
-				onTaskCompleted(this, index, bitmap);
+			if (context != null && !isCancelled()) {
+				onTaskCompleted(this, index, bitmap, uri);
 			}
 		}
 	}
 
-	private void onTaskCompleted(DownloadImageTask downloadImageTask, Integer index, Bitmap bitmap) {
+	private void onTaskCompleted(DownloadImageTask downloadImageTask, Integer index, Bitmap bitmap, String uri) {
 		if (index == 0) {
 			// first image should be displayed as soon as possible.
 			this.setImageBitmap(bitmap);
 		}
 
+		bitmapIndexes.put(uri, index);
 		bitmaps.put(index, bitmap);
 		activeTasks.remove(downloadImageTask);
 
@@ -116,20 +154,20 @@ public class RCTImageSequenceView extends ImageView {
 				activeTasks.get(index).cancel(true);
 			}
 		}
-
 		activeTasks = new ArrayList<>(uris.size());
 		bitmaps = new HashMap<>(uris.size());
-
+		bitmapIndexes = new HashMap<>();
+		//16K used by Bitmap by default, but this storage is allocated once and shared between tasks (they need to be executed within SERIAL_EXECUTOR)
+		tempStorage = new byte[16 * 1024];
 		for (int index = 0; index < uris.size(); index++) {
 			DownloadImageTask task =
 					new DownloadImageTask(index, uris.get(index), getContext(), this.desiredWidth, this.desiredHeight);
 			activeTasks.add(task);
-
 			try {
-				task.executeOnExecutor(AsyncTask.THREAD_POOL_EXECUTOR);
+				task.execute();
 			}
 			catch (RejectedExecutionException e) {
-				Log.e("react-native-image-sequence", "DownloadImageTask failed" + e.getMessage());
+				Log.e("RCTImageSequenceView", "DownloadImageTask failed" + e.getMessage());
 				break;
 			}
 		}
@@ -163,10 +201,9 @@ public class RCTImageSequenceView extends ImageView {
 			BitmapDrawable drawable = new BitmapDrawable(this.getResources(), bitmaps.get(index));
 			animationDrawable.addFrame(drawable, 1000 / framesPerSecond);
 		}
-
+		tempStorage = null;
 		animationDrawable.setOneShot(false);
 		animationDrawable.start();
-
 		this.setImageDrawable(animationDrawable);
 	}
 }
